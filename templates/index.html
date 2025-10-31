@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>KOMI TikTok Sheet Update</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+</head>
+<body>
+  <div class="background"></div>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <h1>KOMI <span class="highlight">TikTok</span> Script</h1>
+        <p class="tagline">Real-time stats for Lucy’s TikTok Sheet</p>
+      </div>
+
+      <div class="selector">
+        <label><i class="fas fa-table"></i> Select Sheet</label>
+        <select id="worksheet">
+          {% for ws in worksheets %}
+            <option value="{{ ws }}">{{ ws }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <button id="startBtn" class="btn-primary">
+        <span class="btn-icon"><i class="fas fa-play"></i></span>
+        <span class="btn-text">Start</span>
+        <span class="loader"><i class="fas fa-sync fa-spin"></i></span>
+      </button>
+
+      <div id="progressContainer" class="progress-ring hidden">
+        <div class="ring">
+          <svg class="progress-svg">
+            <circle class="bg" cx="50" cy="50" r="40"></circle>
+            <circle class="fill" cx="50" cy="50" r="40"></circle>
+          </svg>
+          <div class="percent">0%</div>
+        </div>
+      </div>
+
+      <div id="log" class="log-feed"></div>
+
+      <div class="footer">
+        <button id="darkMode" class="icon-btn"><i class="fas fa-moon"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const loader = startBtn.querySelector('.loader');
+    const btnText = startBtn.querySelector('.btn-text');
+    const btnIcon = startBtn.querySelector('.btn-icon');
+    const progressContainer = document.getElementById('progressContainer');
+    const fillCircle = document.querySelector('.progress-svg .fill');
+    const percentText = document.querySelector('.percent');
+    const log = document.getElementById('log');
+    const darkModeBtn = document.getElementById('darkMode');
+
+    darkModeBtn.addEventListener('click', () => {
+      document.body.classList.toggle('dark');
+      const icon = darkModeBtn.querySelector('i');
+      icon.classList.toggle('fa-moon');
+      icon.classList.toggle('fa-sun');
+    });
+
+    startBtn.addEventListener('click', () => {
+      const ws = document.getElementById('worksheet').value;
+      startBtn.disabled = true;
+      btnText.classList.add('hidden');
+      btnIcon.classList.add('hidden');
+      loader.classList.remove('hidden');
+      progressContainer.classList.remove('hidden');
+      log.innerHTML = '';
+
+      fetch('/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ worksheet: ws })
+      });
+
+      const interval = setInterval(() => {
+        fetch('/status').then(r => r.json()).then(d => {
+          const circumference = 2 * Math.PI * 40;
+          const offset = circumference - (d.progress / 100) * circumference;
+          fillCircle.style.strokeDashoffset = offset;
+          percentText.textContent = d.progress + '%';
+
+          if (d.current) {
+            addLog(`Scraping: ${d.current}`, 'info');
+          }
+          d.log.forEach(msg => {
+            if (!log.innerHTML.includes(msg)) {
+              addLog(msg, msg.includes('Success') ? 'success' : msg.includes('Error') ? 'error' : 'info');
+            }
+          });
+          log.scrollTop = log.scrollHeight;
+
+          if (!d.running) {
+            clearInterval(interval);
+            setTimeout(() => {
+              startBtn.disabled = false;
+              btnText.classList.remove('hidden');
+              btnIcon.classList.remove('hidden');
+              loader.classList.add('hidden');
+              progressContainer.classList.add('hidden');
+            }, 800);
+          }
+        });
+      }, 700);
+    });
+
+    function addLog(html, type) {
+      const div = document.createElement('div');
+      div.className = `log-item ${type}`;
+      div.innerHTML = html;
+      log.appendChild(div);
+    }
+  </script>
+</body>
+</html>
