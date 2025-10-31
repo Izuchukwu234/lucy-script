@@ -6,23 +6,38 @@ import requests
 import re
 import time
 import threading
+import os
+import json
 
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 # === CONFIG ===
 TIKTOK_SHEET_ID = "1F4WsEcIby3liWlW0bmz3cpE3nGGXmQQ2BYsfTSzVY2Y"
-TOKEN = "lSNX5D8FW02vlTX4"
 ROOT_URL = "https://ensembledata.com/apis"
 ENDPOINT = "/tt/post/info"
 
+# === SECRETS FROM RENDER (NO FILES!) ===
+TOKEN = os.environ.get('TIKTOK_TOKEN')
+if not TOKEN:
+    raise RuntimeError("TIKTOK_TOKEN not set! Add it in Render > Environment Variables")
+
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+
+creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+if not creds_json:
+    raise RuntimeError("GOOGLE_CREDENTIALS not set! Paste your JSON in Render")
+
+creds_dict = json.loads(creds_json)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+
 client = gspread.authorize(creds)
 spreadsheet = client.open_by_key(TIKTOK_SHEET_ID)
 
+# === WORKSHEETS ===
 WORKSHEETS = ["SCRIPTED", "REPOST", "ARK"]
 
+# === TASK STATUS ===
 task_status = {
     "running": False,
     "progress": 0,
@@ -32,6 +47,7 @@ task_status = {
     "worksheet": None
 }
 
+# === HELPERS ===
 def clean_url(url):
     match = re.search(r"(https://www\.tiktok\.com/@[^/]+/video/\d+)", url)
     return match.group(1) if match else url
@@ -51,9 +67,10 @@ def get_stats(raw_url):
             "LIKES": s["digg_count"]
         }
     except Exception as e:
-        print(f"[ERROR] {e}")
+        print(f"[API ERROR] {e}")
         return None
 
+# === SCRAPER TASK ===
 def scraper_task(worksheet_name):
     global task_status
     task_status["running"] = True
@@ -65,7 +82,7 @@ def scraper_task(worksheet_name):
         links = sheet.col_values(1)
 
         if not links or links[0] != "LINK":
-            task_status["log"].append("Column A must be exactly <code>LINK</code>")
+            task_status["log"].append("Error: Column A must be exactly <code>LINK</code>")
             task_status["running"] = False
             return
 
@@ -75,7 +92,7 @@ def scraper_task(worksheet_name):
         updates = []
         for i, link in enumerate(links[1:], start=2):
             if not link.strip():
-                task_status["log"].append("Empty row → stopped")
+                task_status["log"].append("Stopped at empty row")
                 break
 
             short = link[:45] + "..." if len(link) > 45 else link
@@ -95,14 +112,15 @@ def scraper_task(worksheet_name):
 
         if updates:
             sheet.batch_update(updates)
-            task_status["log"].append(f"Updated <strong>{len(updates)}</strong> rows")
+            task_status["log"].append(f"<strong>Success:</strong> Updated {len(updates)} rows")
 
     except Exception as e:
-        task_status["log"].append(f"Error: {str(e)}")
+        task_status["log"].append(f"<strong>Error:</strong> {str(e)}")
     finally:
         task_status["running"] = False
         task_status["progress"] = 100
 
+# === ROUTES ===
 @app.route('/')
 def index():
     return render_template('index.html', worksheets=WORKSHEETS)
@@ -111,14 +129,18 @@ def index():
 def start():
     global task_status
     if task_status["running"]:
-        return jsonify({"error": "Running"}), 400
+        return jsonify({"error": "Already running"}), 400
 
     ws = request.json.get("worksheet")
     if ws not in WORKSHEETS:
-        return jsonify({"error": "Invalid"}), 400
+        return jsonify({"error": "Invalid sheet"}), 400
 
     task_status.update({
-        "running": True, "progress": 0, "current": "", "log": [], "worksheet": ws
+        "running": True,
+        "progress": 0,
+        "current": "",
+        "log": [],
+        "worksheet": ws
     })
 
     threading.Thread(target=scraper_task, args=(ws,), daemon=True).start()
@@ -128,5 +150,6 @@ def start():
 def status():
     return jsonify(task_status)
 
+# === RUN ===
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=False)
